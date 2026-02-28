@@ -28,8 +28,6 @@ export interface SimulationConfig {
     INITIAL_AGENTS: number;
     INITIAL_RESOURCES: number;
     AGENT_SPAWN_THRESHOLD: number;
-    RESOURCE_SPAWN_CHANCE: number;
-    RESOURCE_MAX_COUNT: number;
     RESOURCE_CLUSTER_CHANCE: number;
     RESOURCE_CLUSTER_SIZE: number;
     RESOURCE_CLUSTER_RADIUS: number;

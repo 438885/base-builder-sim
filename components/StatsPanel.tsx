@@ -250,19 +250,6 @@ const StatsPanel: React.FC<StatsPanelProps> = ({
                                     onChange={(v) => handleConfigUpdate('AGENT_LOS', v)} 
                                 />
                                 <RangeInput 
-                                    label="Spawn Rate" 
-                                    value={config.RESOURCE_SPAWN_CHANCE} 
-                                    min={0.1} max={10} step={0.1}
-                                    format={(v) => v.toFixed(1)}
-                                    onChange={(v) => handleConfigUpdate('RESOURCE_SPAWN_CHANCE', v)} 
-                                />
-                                <RangeInput 
-                                    label="Max Resources" 
-                                    value={config.RESOURCE_MAX_COUNT} 
-                                    min={50} max={2000} step={50}
-                                    onChange={(v) => handleConfigUpdate('RESOURCE_MAX_COUNT', v)} 
-                                />
-                                <RangeInput 
                                     label="Cluster Chance" 
                                     value={config.RESOURCE_CLUSTER_CHANCE} 
                                     min={0} max={1.0} step={0.05}
@@ -305,7 +292,7 @@ const StatsPanel: React.FC<StatsPanelProps> = ({
 
                             <SettingGroup title="Initial Conditions (Requires Reset)">
                                 <RangeInput 
-                                    label="World Size" 
+                                    label="Chunk Size" 
                                     value={config.WORLD_SIZE} 
                                     min={512} max={4096} step={128}
                                     onChange={(v) => handleConfigUpdate('WORLD_SIZE', v)} 

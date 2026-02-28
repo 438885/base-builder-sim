@@ -10,8 +10,6 @@ export const DefaultConfig: SimulationConfig = {
     INITIAL_AGENTS: 3,
     INITIAL_RESOURCES: 64,
     AGENT_SPAWN_THRESHOLD: 262144,
-    RESOURCE_SPAWN_CHANCE: 0.1,
-    RESOURCE_MAX_COUNT: 500,
     RESOURCE_CLUSTER_CHANCE: 0.2,
     RESOURCE_CLUSTER_SIZE: 5,
     RESOURCE_CLUSTER_RADIUS: 40,
@@ -110,7 +108,7 @@ function smoothPath(path: Point[], obstacle: Rect, agentW: number, agentH: numbe
     return smoothed;
 }
 
-function findPath(start: Rect, end: Point, obstacle: Rect, worldSize: number, mode: PathfindingMode, enableSmoothing: boolean): Point[] {
+function findPath(start: Rect, end: Point, obstacle: Rect, mode: PathfindingMode, enableSmoothing: boolean): Point[] {
     const startGrid = { x: Math.floor(start.x / GRID_SIZE), y: Math.floor(start.y / GRID_SIZE) };
     const endGrid = { x: Math.floor(end.x / GRID_SIZE), y: Math.floor(end.y / GRID_SIZE) };
     
@@ -175,7 +173,6 @@ function findPath(start: Rect, end: Point, obstacle: Rect, worldSize: number, mo
             const key = `${nx},${ny}`;
 
             // Bounds check
-            if (nx < 0 || ny < 0 || nx * GRID_SIZE >= worldSize || ny * GRID_SIZE >= worldSize) continue;
             if (closedSet.has(key)) continue;
 
             // Obstacle Check (Base)
@@ -272,7 +269,7 @@ export class Resource {
 
 export class Base {
     rect: RectImpl;
-    slots: { x: number; y: number }[] = [];
+    slots: { x: number; y: number; reserved: boolean }[] = [];
     resourceSize: number;
 
     constructor(config: SimulationConfig) {
@@ -287,13 +284,13 @@ export class Base {
         const r = this.resourceSize;
         // Top and Bottom perimeters
         for (let x = this.rect.x - r; x < this.rect.x + this.rect.w + r; x += r) {
-            this.slots.push({ x, y: this.rect.y - r }); // Top
-            this.slots.push({ x, y: this.rect.y + this.rect.h }); // Bottom
+            this.slots.push({ x, y: this.rect.y - r, reserved: false }); // Top
+            this.slots.push({ x, y: this.rect.y + this.rect.h, reserved: false }); // Bottom
         }
         // Left and Right perimeters
         for (let y = this.rect.y; y < this.rect.y + this.rect.h; y += r) {
-            this.slots.push({ x: this.rect.x - r, y }); // Left
-            this.slots.push({ x: this.rect.x + this.rect.w, y }); // Right
+            this.slots.push({ x: this.rect.x - r, y, reserved: false }); // Left
+            this.slots.push({ x: this.rect.x + this.rect.w, y, reserved: false }); // Right
         }
     }
 
@@ -301,22 +298,33 @@ export class Base {
         return Math.floor(this.rect.w * this.rect.h);
     }
 
-    deposit(resource: Resource, agentPos: { x: number; y: number }) {
-        if (this.slots.length === 0) return;
-
-        // Find nearest gap
-        let nearestIdx = 0;
+    reserveSlot(agentPos: { x: number; y: number }): { x: number; y: number; reserved: boolean } | null {
+        let nearestIdx = -1;
         let minDist = Infinity;
 
         this.slots.forEach((slot, i) => {
-            const dist = Math.sqrt(Math.pow(slot.x - agentPos.x, 2) + Math.pow(slot.y - agentPos.y, 2));
-            if (dist < minDist) {
-                minDist = dist;
-                nearestIdx = i;
+            if (!slot.reserved) {
+                const dist = Math.sqrt(Math.pow(slot.x - agentPos.x, 2) + Math.pow(slot.y - agentPos.y, 2));
+                if (dist < minDist) {
+                    minDist = dist;
+                    nearestIdx = i;
+                }
             }
         });
 
-        const slot = this.slots.splice(nearestIdx, 1)[0];
+        if (nearestIdx !== -1) {
+            this.slots[nearestIdx].reserved = true;
+            return this.slots[nearestIdx];
+        }
+        return null;
+    }
+
+    deposit(resource: Resource, slot: { x: number; y: number; reserved: boolean }) {
+        const idx = this.slots.indexOf(slot);
+        if (idx !== -1) {
+            this.slots.splice(idx, 1);
+        }
+        
         resource.rect.x = slot.x;
         resource.rect.y = slot.y;
         resource.isDeposited = true;
@@ -348,6 +356,9 @@ export class Agent {
     path: Point[] = [];
     pathIndex: number = 0;
 
+    targetSlot: { x: number; y: number; reserved: boolean } | null = null;
+    standPos: { x: number; y: number } | null = null;
+
     constructor(x: number, y: number, size: number, initialSpeed: number) {
         this.rect = new RectImpl(x, y, size, size);
         // Start with random direction instead of vertical
@@ -357,6 +368,27 @@ export class Agent {
             y: Math.sin(angle) * initialSpeed 
         };
         this.id = Math.random().toString(36).substr(2, 9);
+    }
+
+    _calculateStandPos(slot: { x: number; y: number }, base: Base) {
+        let standX = slot.x;
+        let standY = slot.y;
+        const r = base.resourceSize;
+        
+        if (slot.y < base.rect.y) { // Top
+            standY = slot.y - this.rect.h;
+            standX = slot.x + (r - this.rect.w) / 2;
+        } else if (slot.y >= base.rect.y + base.rect.h) { // Bottom
+            standY = slot.y + r;
+            standX = slot.x + (r - this.rect.w) / 2;
+        } else if (slot.x < base.rect.x) { // Left
+            standX = slot.x - this.rect.w;
+            standY = slot.y + (r - this.rect.h) / 2;
+        } else if (slot.x >= base.rect.x + base.rect.w) { // Right
+            standX = slot.x + r;
+            standY = slot.y + (r - this.rect.h) / 2;
+        }
+        return { x: standX, y: standY };
     }
 
     _moveTowards(tx: number, ty: number, speed: number, wiggle: number) {
@@ -411,24 +443,6 @@ export class Agent {
             this.rect.x += this.lastMove.x;
             this.rect.y += this.lastMove.y;
 
-            // Bounce X
-            if (this.rect.x <= 0) {
-                this.rect.x = 0;
-                this.lastMove.x = Math.abs(this.lastMove.x);
-            } else if (this.rect.x >= WORLD_SIZE - this.rect.w) {
-                this.rect.x = WORLD_SIZE - this.rect.w;
-                this.lastMove.x = -Math.abs(this.lastMove.x);
-            }
-
-            // Bounce Y
-            if (this.rect.y <= 0) {
-                this.rect.y = 0;
-                this.lastMove.y = Math.abs(this.lastMove.y);
-            } else if (this.rect.y >= WORLD_SIZE - this.rect.h) {
-                this.rect.y = WORLD_SIZE - this.rect.h;
-                this.lastMove.y = -Math.abs(this.lastMove.y);
-            }
-
             // Random direction change (Wiggle)
             if (AGENT_WIGGLE > 0 && Math.random() < AGENT_WIGGLE * 0.05) {
                 // Rotate vector slightly +/- 45 degrees
@@ -446,39 +460,57 @@ export class Agent {
             const cx = this.rect.x + this.rect.w / 2;
             const cy = this.rect.y + this.rect.h / 2;
             const losSq = AGENT_LOS * AGENT_LOS;
+            
+            // Only check resources in current and adjacent chunks
+            const chunkSize = world.config.WORLD_SIZE;
+            const chunkX = Math.floor(this.rect.x / chunkSize);
+            const chunkY = Math.floor(this.rect.y / chunkSize);
+            
+            let foundTarget = false;
 
-            for (const res of world.resources) {
-                if (!res.isCarried && !res.isDeposited) {
-                    const rcx = res.rect.x + res.rect.w / 2;
-                    const rcy = res.rect.y + res.rect.h / 2;
-                    
-                    // Check distance to resource
-                    const distSq = (cx - rcx) ** 2 + (cy - rcy) ** 2;
+            for (let y = chunkY - 1; y <= chunkY + 1; y++) {
+                for (let x = chunkX - 1; x <= chunkX + 1; x++) {
+                    const key = `${x},${y}`;
+                    const chunkResources = world.resourceChunks.get(key);
+                    if (!chunkResources) continue;
 
-                    if (distSq <= losSq) {
-                        // Resource is visible. 
-                        // Now check if any neighbor (within LOS) has already claimed it.
-                        let isClaimedByNeighbor = false;
+                    for (const res of chunkResources) {
+                        if (!res.isCarried && !res.isDeposited) {
+                            const rcx = res.rect.x + res.rect.w / 2;
+                            const rcy = res.rect.y + res.rect.h / 2;
+                            
+                            // Check distance to resource
+                            const distSq = (cx - rcx) ** 2 + (cy - rcy) ** 2;
 
-                        if (res.claimedBy && res.claimedBy !== this) {
-                            const ocx = res.claimedBy.rect.x + res.claimedBy.rect.w / 2;
-                            const ocy = res.claimedBy.rect.y + res.claimedBy.rect.h / 2;
-                            const distToAgentSq = (cx - ocx) ** 2 + (cy - ocy) ** 2;
+                            if (distSq <= losSq) {
+                                // Resource is visible. 
+                                // Now check if any neighbor (within LOS) has already claimed it.
+                                let isClaimedByNeighbor = false;
 
-                            if (distToAgentSq <= losSq) {
-                                isClaimedByNeighbor = true;
+                                if (res.claimedBy && res.claimedBy !== this) {
+                                    const ocx = res.claimedBy.rect.x + res.claimedBy.rect.w / 2;
+                                    const ocy = res.claimedBy.rect.y + res.claimedBy.rect.h / 2;
+                                    const distToAgentSq = (cx - ocx) ** 2 + (cy - ocy) ** 2;
+
+                                    if (distToAgentSq <= losSq) {
+                                        isClaimedByNeighbor = true;
+                                    }
+                                }
+
+                                if (!isClaimedByNeighbor) {
+                                    this.targetResource = res;
+                                    res.claimedBy = this;
+                                    this.state = AgentState.APPROACH;
+                                    this.path = []; // Reset path when target found
+                                    foundTarget = true;
+                                    break;
+                                }
                             }
                         }
-
-                        if (!isClaimedByNeighbor) {
-                            this.targetResource = res;
-                            res.claimedBy = this;
-                            this.state = AgentState.APPROACH;
-                            this.path = []; // Reset path when target found
-                            break;
-                        }
                     }
+                    if (foundTarget) break;
                 }
+                if (foundTarget) break;
             }
         } else if (this.state === AgentState.APPROACH) {
             if (!this.targetResource || this.targetResource.isCarried || this.targetResource.isDeposited) {
@@ -497,7 +529,7 @@ export class Agent {
             } else {
                 // A_STAR, GREEDY, DIJKSTRA
                 if (this.path.length === 0) {
-                    this.path = findPath(this.rect, this.targetResource.rect, world.base.rect, WORLD_SIZE, PATHFINDING_MODE, ENABLE_SMOOTHING);
+                    this.path = findPath(this.rect, this.targetResource.rect, world.base.rect, PATHFINDING_MODE, ENABLE_SMOOTHING);
                     this.pathIndex = 0;
                 }
                 
@@ -525,67 +557,115 @@ export class Agent {
                 this.targetResource = null;
                 this.state = AgentState.RETURN;
                 this.path = []; // Reset path for return trip
+                this.targetSlot = world.base.reserveSlot({ x: this.rect.x, y: this.rect.y });
+                if (this.targetSlot) {
+                    this.standPos = this._calculateStandPos(this.targetSlot, world.base);
+                }
             }
         } else if (this.state === AgentState.RETURN) {
             if (!this.carriedResource) {
                 this.state = AgentState.SEARCH;
                 this.path = [];
+                if (this.targetSlot) {
+                    this.targetSlot.reserved = false;
+                    this.targetSlot = null;
+                    this.standPos = null;
+                }
                 return;
             }
 
-            const bc = world.base.rect.center;
-            const targetX = bc.x - 8;
-            const targetY = bc.y - 8;
-
-            // In return, we just go direct unless A* is super requested, 
-            // but usually return is direct to base perimeter.
-            // Actually, if we are on the wrong side of the base, we might clip through it if the base is huge.
-            // But 'Return' means we WANT to hit the base.
-            // A* is useful if there were OTHER obstacles. 
-            // For now, let's stick to direct for return to ensure they hit the base, 
-            // OR use A* to get to the edge if we wanted to be fancy, but collision triggers deposit.
-            
-            // Just use direct with wiggle for return to simulate "hauling".
-             this._moveTowards(targetX, targetY, AGENT_SPEED, AGENT_WIGGLE);
-
-            // Carry logic visual
-            if (Math.abs(this.lastMove.y) > Math.abs(this.lastMove.x)) {
-                if (this.lastMove.y < 0) { // Up
-                    this.carriedResource.rect.x = this.rect.x + 4;
-                    this.carriedResource.rect.y = this.rect.y - 8;
-                } else { // Down
-                    this.carriedResource.rect.x = this.rect.x + 4;
-                    this.carriedResource.rect.y = this.rect.y + 16;
-                }
-            } else {
-                if (this.lastMove.x < 0) { // Left
-                    this.carriedResource.rect.x = this.rect.x - 8;
-                    this.carriedResource.rect.y = this.rect.y + 4;
-                } else { // Right
-                    this.carriedResource.rect.x = this.rect.x + 16;
-                    this.carriedResource.rect.y = this.rect.y + 4;
+            if (!this.targetSlot) {
+                this.targetSlot = world.base.reserveSlot({ x: this.rect.x, y: this.rect.y });
+                if (this.targetSlot) {
+                    this.standPos = this._calculateStandPos(this.targetSlot, world.base);
                 }
             }
 
-            if (this.rect.collidesWith(world.base.rect)) {
-                world.base.deposit(this.carriedResource!, { x: this.rect.x, y: this.rect.y });
-                this.carriedResource = null;
-                this.state = AgentState.SEARCH;
-                this.path = [];
+            let targetX = world.base.rect.center.x - this.rect.w / 2;
+            let targetY = world.base.rect.center.y - this.rect.h / 2;
+
+            if (this.standPos) {
+                targetX = this.standPos.x;
+                targetY = this.standPos.y;
+            }
+
+            // Move towards target
+            if (PATHFINDING_MODE === PathfindingMode.DIRECT || !this.standPos) {
+                this._moveTowards(targetX, targetY, AGENT_SPEED, 0); // No wiggle for precise insertion
+            } else {
+                if (this.path.length === 0) {
+                    this.path = findPath(this.rect, {x: targetX + this.rect.w/2, y: targetY + this.rect.h/2}, world.base.rect, PATHFINDING_MODE, ENABLE_SMOOTHING);
+                    this.pathIndex = 0;
+                }
+                
+                if (this.pathIndex < this.path.length) {
+                    const nextPoint = this.path[this.pathIndex];
+                    this._moveTowards(nextPoint.x - this.rect.w/2, nextPoint.y - this.rect.h/2, AGENT_SPEED, 0);
+                    
+                    if (Math.abs(this.rect.x + this.rect.w/2 - nextPoint.x) < AGENT_SPEED && Math.abs(this.rect.y + this.rect.h/2 - nextPoint.y) < AGENT_SPEED) {
+                        this.pathIndex++;
+                    }
+                } else {
+                    this._moveTowards(targetX, targetY, AGENT_SPEED, 0);
+                }
+            }
+
+            // Carry logic visual - Snap to front
+            if (Math.abs(this.lastMove.y) > Math.abs(this.lastMove.x)) {
+                if (this.lastMove.y < 0) { // Up
+                    this.carriedResource.rect.x = this.rect.x + (this.rect.w - this.carriedResource.rect.w) / 2;
+                    this.carriedResource.rect.y = this.rect.y - this.carriedResource.rect.h;
+                } else { // Down
+                    this.carriedResource.rect.x = this.rect.x + (this.rect.w - this.carriedResource.rect.w) / 2;
+                    this.carriedResource.rect.y = this.rect.y + this.rect.h;
+                }
+            } else {
+                if (this.lastMove.x < 0) { // Left
+                    this.carriedResource.rect.x = this.rect.x - this.carriedResource.rect.w;
+                    this.carriedResource.rect.y = this.rect.y + (this.rect.h - this.carriedResource.rect.h) / 2;
+                } else { // Right
+                    this.carriedResource.rect.x = this.rect.x + this.rect.w;
+                    this.carriedResource.rect.y = this.rect.y + (this.rect.h - this.carriedResource.rect.h) / 2;
+                }
+            }
+
+            // Check if reached the stand position
+            if (this.standPos) {
+                const distToStand = Math.sqrt(Math.pow(this.rect.x - this.standPos.x, 2) + Math.pow(this.rect.y - this.standPos.y, 2));
+                if (distToStand <= AGENT_SPEED) {
+                    // Snap to exact position
+                    this.rect.x = this.standPos.x;
+                    this.rect.y = this.standPos.y;
+                    
+                    world.base.deposit(this.carriedResource, this.targetSlot!);
+                    this.carriedResource = null;
+                    this.targetSlot = null;
+                    this.standPos = null;
+                    this.state = AgentState.SEARCH;
+                    this.path = [];
+                    
+                    // Turn around (move away from base)
+                    let dx = this.rect.x + this.rect.w/2 - world.base.rect.center.x;
+                    let dy = this.rect.y + this.rect.h/2 - world.base.rect.center.y;
+                    const dist = Math.sqrt(dx*dx + dy*dy) || 1;
+                    this.lastMove.x = (dx / dist) * AGENT_SPEED;
+                    this.lastMove.y = (dy / dist) * AGENT_SPEED;
+                }
+            } else {
+                // If no slot available, prevent entering base
+                if (this.rect.collidesWith(world.base.rect)) {
+                    this.rect.x -= this.lastMove.x;
+                    this.rect.y -= this.lastMove.y;
+                }
             }
         }
         
         // Resolve Collisions (Basic separation)
         this._resolveCollisions(world);
-
-        // World Bounds Clamp
-        this.rect.x = Math.max(0, Math.min(WORLD_SIZE - this.rect.w, this.rect.x));
-        this.rect.y = Math.max(0, Math.min(WORLD_SIZE - this.rect.h, this.rect.y));
     }
 
     _resolveCollisions(world: SimulationEngine) {
         const GRID_CELL = 32;
-        const cols = Math.ceil(world.config.WORLD_SIZE / GRID_CELL);
         
         const cx = Math.floor((this.rect.x + this.rect.w/2) / GRID_CELL);
         const cy = Math.floor((this.rect.y + this.rect.h/2) / GRID_CELL);
@@ -593,13 +673,8 @@ export class Agent {
         // Check 3x3 area
         for (let y = cy - 1; y <= cy + 1; y++) {
             for (let x = cx - 1; x <= cx + 1; x++) {
-                if (x < 0 || y < 0 || x >= cols) continue; // Boundary check approx (assuming rows similar)
-                
-                const idx = y * cols + x;
-                // Safety check for grid bounds
-                if (idx < 0 || idx >= world.agentGrid.length) continue;
-
-                const cell = world.agentGrid[idx];
+                const key = `${x},${y}`;
+                const cell = world.agentGrid.get(key);
                 if (cell) {
                     for (const other of cell) {
                         if (other === this) continue;
@@ -626,7 +701,9 @@ export class SimulationEngine {
     base: Base;
     agents: Agent[] = [];
     resources: Resource[] = [];
-    agentGrid: Agent[][] = []; // Spatial partitioning for collisions
+    agentGrid: Map<string, Agent[]> = new Map(); // Spatial partitioning for collisions
+    generatedChunks: Set<string> = new Set();
+    resourceChunks: Map<string, Resource[]> = new Map(); // Spatial partitioning for resources
     totalPoints: number = 0;
     spawnAccumulator: number = 0;
     tickCount: number = 0;
@@ -638,44 +715,53 @@ export class SimulationEngine {
     }
 
     _initializeEntities() {
-        let resCount = 0;
-        while (resCount < this.config.INITIAL_RESOURCES) {
-            if (Math.random() < this.config.RESOURCE_CLUSTER_CHANCE) {
-                const centerX = Math.floor(Math.random() * (this.config.WORLD_SIZE - this.config.RESOURCE_SIZE));
-                const centerY = Math.floor(Math.random() * (this.config.WORLD_SIZE - this.config.RESOURCE_SIZE));
-                const clusterSize = Math.floor(Math.random() * this.config.RESOURCE_CLUSTER_SIZE) + 1;
-                for (let j = 0; j < clusterSize; j++) {
-                    if (resCount >= this.config.INITIAL_RESOURCES) break;
-                    this._spawnResource(centerX, centerY, this.config.RESOURCE_CLUSTER_RADIUS);
-                    resCount++;
-                }
-            } else {
-                this._spawnResource();
-                resCount++;
-            }
-        }
+        this._generateChunk(0, 0);
         for (let i = 0; i < this.config.INITIAL_AGENTS; i++) this._spawnAgent();
     }
 
-    _spawnResource(centerX?: number, centerY?: number, radius?: number) {
-        if (this.resources.length >= this.config.RESOURCE_MAX_COUNT) return;
+    _generateChunk(cx: number, cy: number) {
+        const key = `${cx},${cy}`;
+        if (this.generatedChunks.has(key)) return;
+        this.generatedChunks.add(key);
 
-        let x, y;
-        if (centerX !== undefined && centerY !== undefined && radius !== undefined) {
-            // Spawn within radius
-            const angle = Math.random() * Math.PI * 2;
-            const r = Math.random() * radius;
-            x = centerX + Math.cos(angle) * r;
-            y = centerY + Math.sin(angle) * r;
-            // Clamp to world
-            x = Math.max(0, Math.min(this.config.WORLD_SIZE - this.config.RESOURCE_SIZE, x));
-            y = Math.max(0, Math.min(this.config.WORLD_SIZE - this.config.RESOURCE_SIZE, y));
-        } else {
-            x = Math.floor(Math.random() * (this.config.WORLD_SIZE - this.config.RESOURCE_SIZE));
-            y = Math.floor(Math.random() * (this.config.WORLD_SIZE - this.config.RESOURCE_SIZE));
+        const chunkSize = this.config.WORLD_SIZE;
+        const resourcesPerChunk = this.config.INITIAL_RESOURCES;
+        
+        const chunkResources: Resource[] = [];
+        
+        let resCount = 0;
+        while (resCount < resourcesPerChunk) {
+            if (Math.random() < this.config.RESOURCE_CLUSTER_CHANCE) {
+                const centerX = cx * chunkSize + Math.floor(Math.random() * (chunkSize - this.config.RESOURCE_SIZE));
+                const centerY = cy * chunkSize + Math.floor(Math.random() * (chunkSize - this.config.RESOURCE_SIZE));
+                const clusterSize = Math.floor(Math.random() * this.config.RESOURCE_CLUSTER_SIZE) + 1;
+                for (let j = 0; j < clusterSize; j++) {
+                    if (resCount >= resourcesPerChunk) break;
+                    this._spawnResourceAt(centerX, centerY, this.config.RESOURCE_CLUSTER_RADIUS, chunkResources);
+                    resCount++;
+                }
+            } else {
+                const x = cx * chunkSize + Math.floor(Math.random() * (chunkSize - this.config.RESOURCE_SIZE));
+                const y = cy * chunkSize + Math.floor(Math.random() * (chunkSize - this.config.RESOURCE_SIZE));
+                const res = new Resource(x, y, this.config.RESOURCE_SIZE);
+                this.resources.push(res);
+                chunkResources.push(res);
+                resCount++;
+            }
         }
+        
+        this.resourceChunks.set(key, chunkResources);
+    }
 
-        this.resources.push(new Resource(x, y, this.config.RESOURCE_SIZE));
+    _spawnResourceAt(centerX: number, centerY: number, radius: number, chunkResources: Resource[]) {
+        // Spawn within radius
+        const angle = Math.random() * Math.PI * 2;
+        const r = Math.random() * radius;
+        const x = centerX + Math.cos(angle) * r;
+        const y = centerY + Math.sin(angle) * r;
+        const res = new Resource(x, y, this.config.RESOURCE_SIZE);
+        this.resources.push(res);
+        chunkResources.push(res);
     }
 
     _spawnAgent() {
@@ -696,48 +782,34 @@ export class SimulationEngine {
         this.tickCount++;
         
         // 1. Rebuild Spatial Grid for Collision
-        // Using a 32px grid size
         const GRID_CELL = 32;
-        const cols = Math.ceil(this.config.WORLD_SIZE / GRID_CELL);
-        const rows = Math.ceil(this.config.WORLD_SIZE / GRID_CELL);
-        
-        // Reset grid
-        this.agentGrid = new Array(cols * rows);
-        for(let i=0; i<this.agentGrid.length; i++) this.agentGrid[i] = [];
+        this.agentGrid.clear();
 
         // Populate grid
         for (const agent of this.agents) {
             const cx = Math.floor((agent.rect.x + agent.rect.w/2) / GRID_CELL);
             const cy = Math.floor((agent.rect.y + agent.rect.h/2) / GRID_CELL);
             
-            // Bounds check for grid assignment
-            if (cx >= 0 && cx < cols && cy >= 0 && cy < rows) {
-                const idx = cy * cols + cx;
-                this.agentGrid[idx].push(agent);
+            const key = `${cx},${cy}`;
+            let cell = this.agentGrid.get(key);
+            if (!cell) {
+                cell = [];
+                this.agentGrid.set(key, cell);
             }
+            cell.push(agent);
         }
 
-        // 2. Spawn Resource (Probabilistic + Count)
-        const spawnRate = this.config.RESOURCE_SPAWN_CHANCE;
-        const count = Math.floor(spawnRate);
-        const remainder = spawnRate - count;
-
-        let spawnsThisTick = count;
-        if (Math.random() < remainder) {
-            spawnsThisTick++;
-        }
-
-        for (let i = 0; i < spawnsThisTick; i++) {
-            if (Math.random() < this.config.RESOURCE_CLUSTER_CHANCE) {
-                // Spawn cluster
-                const centerX = Math.floor(Math.random() * (this.config.WORLD_SIZE - this.config.RESOURCE_SIZE));
-                const centerY = Math.floor(Math.random() * (this.config.WORLD_SIZE - this.config.RESOURCE_SIZE));
-                const clusterSize = Math.floor(Math.random() * this.config.RESOURCE_CLUSTER_SIZE) + 1;
-                for (let j = 0; j < clusterSize; j++) {
-                    this._spawnResource(centerX, centerY, this.config.RESOURCE_CLUSTER_RADIUS);
+        // 2. Generate chunks around agents
+        const chunkSize = this.config.WORLD_SIZE;
+        for (const agent of this.agents) {
+            const cx = Math.floor(agent.rect.x / chunkSize);
+            const cy = Math.floor(agent.rect.y / chunkSize);
+            
+            // Generate current chunk and surrounding chunks (3x3)
+            for (let y = cy - 1; y <= cy + 1; y++) {
+                for (let x = cx - 1; x <= cx + 1; x++) {
+                    this._generateChunk(x, y);
                 }
-            } else {
-                this._spawnResource();
             }
         }
 

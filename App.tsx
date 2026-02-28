@@ -45,7 +45,7 @@ function App() {
             agentCount: engineRef.current.agents.length,
             resourceCount: engineRef.current.resources.length,
             baseSize: engineRef.current.base.rect.w,
-            baseSlotsFree: engineRef.current.base.slots.length,
+            baseSlotsFree: engineRef.current.base.slots.filter(s => !s.reserved).length,
         });
       }
     }

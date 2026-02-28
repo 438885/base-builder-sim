@@ -72,8 +72,6 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ engine, width, height }) => {
             engine.resources.forEach(res => {
                 if (res.isDeposited) {
                     ctx.fillStyle = '#64748b'; // slate-500
-                } else if (res.isCarried) {
-                    ctx.fillStyle = '#22d3ee'; // cyan-400
                 } else {
                     ctx.fillStyle = res.color;
                 }
