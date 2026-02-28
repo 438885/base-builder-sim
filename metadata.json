@@ -1,0 +1,5 @@
+{
+  "name": "base-builder-sim_0.1.4g",
+  "description": "A visual simulation of autonomous agents gathering resources to expand a central base.",
+  "requestFramePermissions": []
+}
