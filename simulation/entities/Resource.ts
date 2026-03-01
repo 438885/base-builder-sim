@@ -1,5 +1,5 @@
 import { RectImpl } from '../math';
-import type { Agent } from './Agent';
+import type { Agent } from './agent/Agent';
 
 export class Resource {
     rect: RectImpl;

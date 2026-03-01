@@ -2,7 +2,7 @@ import { SimulationConfig } from '../types';
 import { DefaultConfig } from './constants';
 import { Resource } from './entities/Resource';
 import { Base } from './entities/Base';
-import { Agent } from './entities/Agent';
+import { Agent } from './entities/agent/Agent';
 
 export class SimulationEngine {
     config: SimulationConfig;
