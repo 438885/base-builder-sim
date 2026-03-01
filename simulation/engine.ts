@@ -587,12 +587,22 @@ export class Agent {
                 targetY = this.standPos.y;
             }
 
+            // Agents returning to base should use A* when coming within sensor range of the base
+            const distToBase = Math.sqrt(
+                Math.pow(this.rect.center.x - world.base.rect.center.x, 2) +
+                Math.pow(this.rect.center.y - world.base.rect.center.y, 2)
+            );
+            const withinLOS = distToBase <= AGENT_LOS;
+            
+            // Use A* if within LOS and mode is DIRECT, or if mode is already A_STAR/GREEDY/DIJKSTRA
+            const effectiveMode = (withinLOS && PATHFINDING_MODE === PathfindingMode.DIRECT) ? PathfindingMode.A_STAR : PATHFINDING_MODE;
+
             // Move towards target
-            if (PATHFINDING_MODE === PathfindingMode.DIRECT || !this.standPos) {
+            if (effectiveMode === PathfindingMode.DIRECT || !this.standPos) {
                 this._moveTowards(targetX, targetY, AGENT_SPEED, 0); // No wiggle for precise insertion
             } else {
                 if (this.path.length === 0) {
-                    this.path = findPath(this.rect, {x: targetX + this.rect.w/2, y: targetY + this.rect.h/2}, world.base.rect, PATHFINDING_MODE, ENABLE_SMOOTHING);
+                    this.path = findPath(this.rect, {x: targetX + this.rect.w/2, y: targetY + this.rect.h/2}, world.base.rect, effectiveMode, ENABLE_SMOOTHING);
                     this.pathIndex = 0;
                 }
                 
@@ -631,23 +641,38 @@ export class Agent {
             if (this.standPos) {
                 const distToStand = Math.sqrt(Math.pow(this.rect.x - this.standPos.x, 2) + Math.pow(this.rect.y - this.standPos.y, 2));
                 if (distToStand <= AGENT_SPEED) {
-                    // Snap to exact position
-                    this.rect.x = this.standPos.x;
-                    this.rect.y = this.standPos.y;
-                    
-                    world.base.deposit(this.carriedResource, this.targetSlot!);
-                    this.carriedResource = null;
-                    this.targetSlot = null;
-                    this.standPos = null;
-                    this.state = AgentState.SEARCH;
-                    this.path = [];
-                    
-                    // Turn around (move away from base)
-                    let dx = this.rect.x + this.rect.w/2 - world.base.rect.center.x;
-                    let dy = this.rect.y + this.rect.h/2 - world.base.rect.center.y;
-                    const dist = Math.sqrt(dx*dx + dy*dy) || 1;
-                    this.lastMove.x = (dx / dist) * AGENT_SPEED;
-                    this.lastMove.y = (dy / dist) * AGENT_SPEED;
+                    // Recalculate A* path one last time immediately before depositing to ensure path is still clear and slot is valid
+                    const finalPath = findPath(this.rect, {x: targetX + this.rect.w/2, y: targetY + this.rect.h/2}, world.base.rect, PathfindingMode.A_STAR, ENABLE_SMOOTHING);
+                    const lastPoint = finalPath[finalPath.length - 1];
+                    const reachedDest = lastPoint && Math.abs(lastPoint.x - (targetX + this.rect.w/2)) < GRID_SIZE && Math.abs(lastPoint.y - (targetY + this.rect.h/2)) < GRID_SIZE;
+                    const slotStillValid = world.base.slots.includes(this.targetSlot!);
+
+                    if (reachedDest && slotStillValid) {
+                        // Snap to exact position
+                        this.rect.x = this.standPos.x;
+                        this.rect.y = this.standPos.y;
+                        
+                        world.base.deposit(this.carriedResource, this.targetSlot!);
+                        this.carriedResource = null;
+                        this.targetSlot = null;
+                        this.standPos = null;
+                        this.state = AgentState.SEARCH;
+                        this.path = [];
+                        
+                        // Turn around (move away from base)
+                        let dx = this.rect.x + this.rect.w/2 - world.base.rect.center.x;
+                        let dy = this.rect.y + this.rect.h/2 - world.base.rect.center.y;
+                        const dist = Math.sqrt(dx*dx + dy*dy) || 1;
+                        this.lastMove.x = (dx / dist) * AGENT_SPEED;
+                        this.lastMove.y = (dy / dist) * AGENT_SPEED;
+                    } else {
+                        // Slot taken or path blocked! Release and try again
+                        if (this.targetSlot) this.targetSlot.reserved = false;
+                        this.targetSlot = null;
+                        this.standPos = null;
+                        this.path = [];
+                        return;
+                    }
                 }
             } else {
                 // If no slot available, prevent entering base
