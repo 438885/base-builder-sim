@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import GameCanvas from './components/GameCanvas';
 import StatsPanel from './components/StatsPanel';
-import { SimulationEngine, DefaultConfig } from './simulation/engine';
+import { SimulationEngine } from './simulation/engine';
+import { DefaultConfig } from './simulation/constants';
 import { SimulationStats, SimulationConfig } from './types';
 
 function App() {
