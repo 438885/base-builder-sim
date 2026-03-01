@@ -84,7 +84,7 @@ export function findPath(start: Rect, end: Point, obstacle: Rect, mode: Pathfind
     const endGrid = { x: Math.floor(end.x / GRID_SIZE), y: Math.floor(end.y / GRID_SIZE) };
     
     // Inflate obstacle by half agent size + buffer to prevent cutting corners or getting stuck
-    const buffer = 4; 
+    const buffer = 8; 
     const halfW = start.w / 2;
     const halfH = start.h / 2;
     

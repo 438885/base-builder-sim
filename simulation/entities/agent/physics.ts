@@ -11,17 +11,18 @@ export function calculateStandPos(agent: Agent, slot: Slot, base: Base) {
     let standY = slot.y;
     const r = base.resourceSize;
     
+    const GAP = 1;
     if (slot.y < base.rect.y) { // Top
-        standY = slot.y - agent.rect.h;
+        standY = slot.y - agent.rect.h - GAP;
         standX = slot.x + (r - agent.rect.w) / 2;
     } else if (slot.y >= base.rect.y + base.rect.h) { // Bottom
-        standY = slot.y + r;
+        standY = slot.y + r + GAP;
         standX = slot.x + (r - agent.rect.w) / 2;
     } else if (slot.x < base.rect.x) { // Left
-        standX = slot.x - agent.rect.w;
+        standX = slot.x - agent.rect.w - GAP;
         standY = slot.y + (r - agent.rect.h) / 2;
     } else if (slot.x >= base.rect.x + base.rect.w) { // Right
-        standX = slot.x + r;
+        standX = slot.x + r + GAP;
         standY = slot.y + (r - agent.rect.h) / 2;
     }
     return { x: standX, y: standY };
@@ -77,7 +78,10 @@ export function resolveCollisions(agent: Agent, world: SimulationEngine) {
                         const dy = (agent.rect.y + agent.rect.h/2) - (other.rect.y + other.rect.h/2);
                         const dist = Math.sqrt(dx*dx + dy*dy) || 0.001;
                         
-                        const pushForce = 1.2; 
+                        // Proportional push force to avoid extreme jitter
+                        const overlap = (agent.rect.w + other.rect.w) / 2 - dist;
+                        const pushForce = Math.max(0.1, overlap * 0.5); 
+                        
                         agent.rect.x += (dx / dist) * pushForce;
                         agent.rect.y += (dy / dist) * pushForce;
                     }
@@ -97,19 +101,19 @@ export function resolveCollisions(agent: Agent, world: SimulationEngine) {
 
         if (minDist === distL) {
             agent.rect.x = br.x - agent.rect.w - 1;
-            if (agent.lastMove.x > 0) agent.lastMove.x *= -0.5;
+            if (agent.lastMove.x > 0) agent.lastMove.x = 0;
         }
         else if (minDist === distR) {
             agent.rect.x = br.x + br.w + 1;
-            if (agent.lastMove.x < 0) agent.lastMove.x *= -0.5;
+            if (agent.lastMove.x < 0) agent.lastMove.x = 0;
         }
         else if (minDist === distT) {
             agent.rect.y = br.y - agent.rect.h - 1;
-            if (agent.lastMove.y > 0) agent.lastMove.y *= -0.5;
+            if (agent.lastMove.y > 0) agent.lastMove.y = 0;
         }
         else if (minDist === distB) {
             agent.rect.y = br.y + br.h + 1;
-            if (agent.lastMove.y < 0) agent.lastMove.y *= -0.5;
+            if (agent.lastMove.y < 0) agent.lastMove.y = 0;
         }
         
         if (agent.state === AgentState.SEARCH) {
