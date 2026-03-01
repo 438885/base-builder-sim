@@ -59,22 +59,13 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ engine, width, height }) => {
             // ctx.lineWidth = 1 / scale;
             // ctx.strokeRect(0, 0, engine.config.WORLD_SIZE, engine.config.WORLD_SIZE);
 
-            // Draw Base Area (Safe zone)
-            ctx.fillStyle = 'rgba(30, 41, 59, 0.8)'; // slate-800
+            // Draw Base Area
+            ctx.fillStyle = '#64748b'; // slate-500
             ctx.fillRect(engine.base.rect.x, engine.base.rect.y, engine.base.rect.w, engine.base.rect.h);
-            
-            // Draw Base Border (Glow effect)
-            ctx.strokeStyle = '#3b82f6'; // blue-500
-            ctx.lineWidth = 2; // Keep consistent line width? or 2/scale?
-            ctx.strokeRect(engine.base.rect.x, engine.base.rect.y, engine.base.rect.w, engine.base.rect.h);
 
             // Draw Resources
             engine.resources.forEach(res => {
-                if (res.isDeposited) {
-                    ctx.fillStyle = '#64748b'; // slate-500
-                } else {
-                    ctx.fillStyle = res.color;
-                }
+                ctx.fillStyle = res.color;
                 ctx.fillRect(res.rect.x, res.rect.y, res.rect.w, res.rect.h);
             });
 

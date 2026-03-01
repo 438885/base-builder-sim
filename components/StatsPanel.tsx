@@ -312,7 +312,7 @@ const StatsPanel: React.FC<StatsPanelProps> = ({
                                 <RangeInput 
                                     label="Base Start Size" 
                                     value={config.BASE_START_SIZE} 
-                                    min={64} max={512} step={32}
+                                    min={8} max={512} step={8}
                                     onChange={(v) => handleConfigUpdate('BASE_START_SIZE', v)} 
                                 />
                                 <RangeInput 

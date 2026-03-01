@@ -4,16 +4,16 @@ export const DefaultConfig: SimulationConfig = {
     WORLD_SIZE: 1024,
     AGENT_SPEED: 3,
     AGENT_LOS: 176,
-    BASE_START_SIZE: 64,
+    BASE_START_SIZE: 24,
     RESOURCE_SIZE: 8,
     AGENT_SIZE: 8,
     INITIAL_AGENTS: 3,
     INITIAL_RESOURCES: 64,
     AGENT_SPAWN_THRESHOLD: 262144,
-    RESOURCE_CLUSTER_CHANCE: 0.2,
-    RESOURCE_CLUSTER_SIZE: 5,
-    RESOURCE_CLUSTER_RADIUS: 40,
-    BASE_POINT_MULTIPLIER: 1.0,
+    RESOURCE_CLUSTER_CHANCE: 1.0,
+    RESOURCE_CLUSTER_SIZE: 50,
+    RESOURCE_CLUSTER_RADIUS: 200,
+    BASE_POINT_MULTIPLIER: 0.2,
     AGENT_WIGGLE: 0,
     MAX_AGENTS: 5000,
     PATHFINDING_MODE: PathfindingMode.A_STAR,
@@ -261,9 +261,7 @@ export class Resource {
 
     constructor(x: number, y: number, size: number) {
         this.rect = new RectImpl(x, y, size, size);
-        // Randomize resource color slightly for aesthetics
-        const hue = Math.floor(Math.random() * 60) + 180; // Cyans/Blues
-        this.color = `hsl(${hue}, 70%, 60%)`;
+        this.color = '#64748b'; // slate-500
     }
 }
 
@@ -730,38 +728,65 @@ export class SimulationEngine {
         const chunkResources: Resource[] = [];
         
         let resCount = 0;
-        while (resCount < resourcesPerChunk) {
+        let attempts = 0;
+        while (resCount < resourcesPerChunk && attempts < resourcesPerChunk * 2) {
+            attempts++;
             if (Math.random() < this.config.RESOURCE_CLUSTER_CHANCE) {
                 const centerX = cx * chunkSize + Math.floor(Math.random() * (chunkSize - this.config.RESOURCE_SIZE));
                 const centerY = cy * chunkSize + Math.floor(Math.random() * (chunkSize - this.config.RESOURCE_SIZE));
                 const clusterSize = Math.floor(Math.random() * this.config.RESOURCE_CLUSTER_SIZE) + 1;
                 for (let j = 0; j < clusterSize; j++) {
                     if (resCount >= resourcesPerChunk) break;
-                    this._spawnResourceAt(centerX, centerY, this.config.RESOURCE_CLUSTER_RADIUS, chunkResources);
-                    resCount++;
+                    if (this._spawnResourceAt(centerX, centerY, this.config.RESOURCE_CLUSTER_RADIUS, chunkResources)) {
+                        resCount++;
+                    }
                 }
             } else {
-                const x = cx * chunkSize + Math.floor(Math.random() * (chunkSize - this.config.RESOURCE_SIZE));
-                const y = cy * chunkSize + Math.floor(Math.random() * (chunkSize - this.config.RESOURCE_SIZE));
-                const res = new Resource(x, y, this.config.RESOURCE_SIZE);
-                this.resources.push(res);
-                chunkResources.push(res);
-                resCount++;
+                const size = this.config.RESOURCE_SIZE;
+                let x = cx * chunkSize + Math.floor(Math.random() * (chunkSize - size));
+                let y = cy * chunkSize + Math.floor(Math.random() * (chunkSize - size));
+                x = Math.floor(x / size) * size;
+                y = Math.floor(y / size) * size;
+                
+                const isOverlapping = chunkResources.some(res => res.rect.x === x && res.rect.y === y);
+                if (!isOverlapping) {
+                    const res = new Resource(x, y, size);
+                    this.resources.push(res);
+                    chunkResources.push(res);
+                    resCount++;
+                }
             }
         }
         
         this.resourceChunks.set(key, chunkResources);
     }
 
-    _spawnResourceAt(centerX: number, centerY: number, radius: number, chunkResources: Resource[]) {
-        // Spawn within radius
-        const angle = Math.random() * Math.PI * 2;
-        const r = Math.random() * radius;
-        const x = centerX + Math.cos(angle) * r;
-        const y = centerY + Math.sin(angle) * r;
-        const res = new Resource(x, y, this.config.RESOURCE_SIZE);
-        this.resources.push(res);
-        chunkResources.push(res);
+    _spawnResourceAt(centerX: number, centerY: number, radius: number, chunkResources: Resource[]): boolean {
+        const size = this.config.RESOURCE_SIZE;
+        let x = 0, y = 0;
+        let isOverlapping = true;
+        let spawnAttempts = 0;
+        
+        while (isOverlapping && spawnAttempts < 50) {
+            const angle = Math.random() * Math.PI * 2;
+            const r = Math.random() * radius;
+            x = centerX + Math.cos(angle) * r;
+            y = centerY + Math.sin(angle) * r;
+            
+            x = Math.floor(x / size) * size;
+            y = Math.floor(y / size) * size;
+            
+            isOverlapping = chunkResources.some(res => res.rect.x === x && res.rect.y === y);
+            spawnAttempts++;
+        }
+        
+        if (!isOverlapping) {
+            const res = new Resource(x, y, size);
+            this.resources.push(res);
+            chunkResources.push(res);
+            return true;
+        }
+        return false;
     }
 
     _spawnAgent() {
