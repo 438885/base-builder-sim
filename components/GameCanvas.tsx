@@ -59,9 +59,19 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ engine, width, height }) => {
             // ctx.lineWidth = 1 / scale;
             // ctx.strokeRect(0, 0, engine.config.WORLD_SIZE, engine.config.WORLD_SIZE);
 
-            // Draw Base Area
+            // Draw Base Area (Individual Blocks)
+            const rSize = engine.config.RESOURCE_SIZE;
+            const br = engine.base.rect;
             ctx.fillStyle = '#64748b'; // slate-500
-            ctx.fillRect(engine.base.rect.x, engine.base.rect.y, engine.base.rect.w, engine.base.rect.h);
+            ctx.strokeStyle = '#020617'; // slate-950 (black-ish)
+            ctx.lineWidth = 1 / scale; 
+            
+            for (let bx = Math.floor(br.x); bx < Math.floor(br.x + br.w); bx += rSize) {
+                for (let by = Math.floor(br.y); by < Math.floor(br.y + br.h); by += rSize) {
+                    ctx.fillRect(bx, by, rSize, rSize);
+                    ctx.strokeRect(bx, by, rSize, rSize);
+                }
+            }
 
             // Draw Resources
             engine.resources.forEach(res => {
@@ -69,33 +79,63 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ engine, width, height }) => {
                 ctx.fillRect(res.rect.x, res.rect.y, res.rect.w, res.rect.h);
             });
 
-            // Draw Agent Paths (APPROACH state)
+            // Draw Agent Paths (APPROACH, RETURN, and REVISIT states)
             ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
-            ctx.lineWidth = 1; // Keeping 1 looks nicer when zoomed out, effectively invisible
-            // To make it visible when zoomed out, maybe 1/scale but clamped
+            ctx.lineWidth = 1 / scale; 
             
             ctx.setLineDash([4, 4]); // Dashed line
             
             ctx.beginPath();
             engine.agents.forEach(agent => {
-                if (agent.state === 'APPROACH' && agent.targetResource) {
+                const isApproaching = agent.state === 'APPROACH' && agent.targetResource;
+                const isReturning = agent.state === 'RETURN' && agent.standPos;
+                const isRevisiting = agent.state === 'REVISIT' && agent.lastPickupPos;
+
+                if (isApproaching || isReturning || isRevisiting) {
                     const ax = agent.rect.x + agent.rect.w / 2;
                     const ay = agent.rect.y + agent.rect.h / 2;
 
-                    if (engine.config.PATHFINDING_MODE === PathfindingMode.A_STAR && agent.path && agent.path.length > 0) {
+                    if (agent.path && agent.path.length > 0) {
                         ctx.moveTo(ax, ay);
                         for(let i = agent.pathIndex; i < agent.path.length; i++) {
                             ctx.lineTo(agent.path[i].x, agent.path[i].y);
                         }
-                        const tx = agent.targetResource.rect.x + agent.targetResource.rect.w / 2;
-                        const ty = agent.targetResource.rect.y + agent.targetResource.rect.h / 2;
-                        ctx.lineTo(tx, ty);
+                        
+                        // Final segment to target
+                        let tx, ty;
+                        if (isApproaching && agent.targetResource) {
+                            tx = agent.targetResource.rect.x + agent.targetResource.rect.w / 2;
+                            ty = agent.targetResource.rect.y + agent.targetResource.rect.h / 2;
+                        } else if (isReturning && agent.standPos) {
+                            tx = agent.standPos.x + agent.rect.w / 2;
+                            ty = agent.standPos.y + agent.rect.h / 2;
+                        } else if (isRevisiting && agent.lastPickupPos) {
+                            tx = agent.lastPickupPos.x + agent.rect.w / 2;
+                            ty = agent.lastPickupPos.y + agent.rect.h / 2;
+                        }
+                        
+                        if (tx !== undefined && ty !== undefined) {
+                            ctx.lineTo(tx, ty);
+                        }
                     } 
-                    else {
-                        const tx = agent.targetResource.rect.x + agent.targetResource.rect.w / 2;
-                        const ty = agent.targetResource.rect.y + agent.targetResource.rect.h / 2;
-                        ctx.moveTo(ax, ay);
-                        ctx.lineTo(tx, ty);
+                    else if (engine.config.PATHFINDING_MODE === PathfindingMode.DIRECT) {
+                        // Direct line for non-pathfinding modes
+                        let tx, ty;
+                        if (isApproaching && agent.targetResource) {
+                            tx = agent.targetResource.rect.x + agent.targetResource.rect.w / 2;
+                            ty = agent.targetResource.rect.y + agent.targetResource.rect.h / 2;
+                        } else if (isReturning && agent.standPos) {
+                            tx = agent.standPos.x + agent.rect.w / 2;
+                            ty = agent.standPos.y + agent.rect.h / 2;
+                        } else if (isRevisiting && agent.lastPickupPos) {
+                            tx = agent.lastPickupPos.x + agent.rect.w / 2;
+                            ty = agent.lastPickupPos.y + agent.rect.h / 2;
+                        }
+
+                        if (tx !== undefined && ty !== undefined) {
+                            ctx.moveTo(ax, ay);
+                            ctx.lineTo(tx, ty);
+                        }
                     }
                 }
             });
@@ -108,6 +148,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ engine, width, height }) => {
                     case 'SEARCH': ctx.fillStyle = '#ef4444'; break;
                     case 'APPROACH': ctx.fillStyle = '#eab308'; break;
                     case 'RETURN': ctx.fillStyle = '#10b981'; break;
+                    case 'REVISIT': ctx.fillStyle = '#8b5cf6'; break; // violet-500
                 }
                 
                 ctx.beginPath();

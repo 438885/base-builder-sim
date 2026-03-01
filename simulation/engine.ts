@@ -350,6 +350,10 @@ export class Agent {
     state: AgentState = AgentState.SEARCH;
     id: string;
     
+    // Memory
+    lastPickupPos: { x: number; y: number } | null = null;
+    hasNearbyResources: boolean = false;
+    
     // Pathfinding
     path: Point[] = [];
     pathIndex: number = 0;
@@ -434,23 +438,60 @@ export class Agent {
             this.lastMove.y *= scale;
         }
 
-        if (this.state === AgentState.SEARCH) {
-            this.path = []; // Clear path
-            
-            // Vector based movement
-            this.rect.x += this.lastMove.x;
-            this.rect.y += this.lastMove.y;
+        if (this.state === AgentState.SEARCH || this.state === AgentState.REVISIT) {
+            if (this.state === AgentState.SEARCH) {
+                this.path = []; // Clear path
+                
+                // Vector based movement
+                this.rect.x += this.lastMove.x;
+                this.rect.y += this.lastMove.y;
 
-            // Random direction change (Wiggle)
-            if (AGENT_WIGGLE > 0 && Math.random() < AGENT_WIGGLE * 0.05) {
-                // Rotate vector slightly +/- 45 degrees
-                const angleChange = (Math.random() - 0.5) * Math.PI / 2;
-                const cos = Math.cos(angleChange);
-                const sin = Math.sin(angleChange);
-                const nx = this.lastMove.x * cos - this.lastMove.y * sin;
-                const ny = this.lastMove.x * sin + this.lastMove.y * cos;
-                this.lastMove.x = nx;
-                this.lastMove.y = ny;
+                // Random direction change (Wiggle)
+                if (AGENT_WIGGLE > 0 && Math.random() < AGENT_WIGGLE * 0.05) {
+                    // Rotate vector slightly +/- 45 degrees
+                    const angleChange = (Math.random() - 0.5) * Math.PI / 2;
+                    const cos = Math.cos(angleChange);
+                    const sin = Math.sin(angleChange);
+                    const nx = this.lastMove.x * cos - this.lastMove.y * sin;
+                    const ny = this.lastMove.x * sin + this.lastMove.y * cos;
+                    this.lastMove.x = nx;
+                    this.lastMove.y = ny;
+                }
+            } else {
+                // REVISIT movement logic
+                if (!this.lastPickupPos) {
+                    this.state = AgentState.SEARCH;
+                } else {
+                    const targetX = this.lastPickupPos.x;
+                    const targetY = this.lastPickupPos.y;
+
+                    if (PATHFINDING_MODE === PathfindingMode.DIRECT) {
+                        this._moveTowards(targetX, targetY, AGENT_SPEED, 0);
+                    } else {
+                        if (this.path.length === 0) {
+                            this.path = findPath(this.rect, {x: targetX + this.rect.w/2, y: targetY + this.rect.h/2}, world.base.rect, PATHFINDING_MODE, ENABLE_SMOOTHING);
+                            this.pathIndex = 0;
+                        }
+                        
+                        if (this.pathIndex < this.path.length) {
+                            const nextPoint = this.path[this.pathIndex];
+                            this._moveTowards(nextPoint.x - this.rect.w/2, nextPoint.y - this.rect.h/2, AGENT_SPEED, 0);
+                            
+                            if (Math.abs(this.rect.x + this.rect.w/2 - nextPoint.x) < AGENT_SPEED && Math.abs(this.rect.y + this.rect.h/2 - nextPoint.y) < AGENT_SPEED) {
+                                this.pathIndex++;
+                            }
+                        } else {
+                            this._moveTowards(targetX, targetY, AGENT_SPEED, 0);
+                        }
+                    }
+
+                    const distToTarget = Math.sqrt(Math.pow(this.rect.x - targetX, 2) + Math.pow(this.rect.y - targetY, 2));
+                    if (distToTarget < AGENT_SPEED * 2) {
+                        this.state = AgentState.SEARCH;
+                        this.hasNearbyResources = false;
+                        this.path = [];
+                    }
+                }
             }
 
             // --- LOS Check with Inter-Agent Communication ---
@@ -547,6 +588,33 @@ export class Agent {
             }
 
             if (this.rect.collidesWith(this.targetResource.rect)) {
+                // Remember location
+                this.lastPickupPos = { x: this.targetResource.rect.x, y: this.targetResource.rect.y };
+                
+                // Check for nearby resources (vicinity)
+                this.hasNearbyResources = false;
+                const losSq = AGENT_LOS * AGENT_LOS;
+                const chunkSize = world.config.WORLD_SIZE;
+                const chunkX = Math.floor(this.rect.x / chunkSize);
+                const chunkY = Math.floor(this.rect.y / chunkSize);
+                
+                outer: for (let y = chunkY - 1; y <= chunkY + 1; y++) {
+                    for (let x = chunkX - 1; x <= chunkX + 1; x++) {
+                        const key = `${x},${y}`;
+                        const chunkResources = world.resourceChunks.get(key);
+                        if (!chunkResources) continue;
+                        for (const res of chunkResources) {
+                            if (res !== this.targetResource && !res.isCarried && !res.isDeposited) {
+                                const distSq = (this.rect.x - res.rect.x) ** 2 + (this.rect.y - res.rect.y) ** 2;
+                                if (distSq <= losSq) {
+                                    this.hasNearbyResources = true;
+                                    break outer;
+                                }
+                            }
+                        }
+                    }
+                }
+
                 this.carriedResource = this.targetResource;
                 this.carriedResource.isCarried = true;
                 if (this.targetResource.claimedBy === this) {
@@ -656,7 +724,14 @@ export class Agent {
                         this.carriedResource = null;
                         this.targetSlot = null;
                         this.standPos = null;
-                        this.state = AgentState.SEARCH;
+                        
+                        // Decide next state: Revisit or Search
+                        if (this.hasNearbyResources && this.lastPickupPos) {
+                            this.state = AgentState.REVISIT;
+                        } else {
+                            this.state = AgentState.SEARCH;
+                        }
+                        
                         this.path = [];
                         
                         // Turn around (move away from base)
@@ -674,16 +749,10 @@ export class Agent {
                         return;
                     }
                 }
-            } else {
-                // If no slot available, prevent entering base
-                if (this.rect.collidesWith(world.base.rect)) {
-                    this.rect.x -= this.lastMove.x;
-                    this.rect.y -= this.lastMove.y;
-                }
             }
         }
         
-        // Resolve Collisions (Basic separation)
+        // Resolve Collisions (Basic separation and Base avoidance)
         this._resolveCollisions(world);
     }
 
@@ -693,7 +762,7 @@ export class Agent {
         const cx = Math.floor((this.rect.x + this.rect.w/2) / GRID_CELL);
         const cy = Math.floor((this.rect.y + this.rect.h/2) / GRID_CELL);
 
-        // Check 3x3 area
+        // Check 3x3 area for agent-agent collisions
         for (let y = cy - 1; y <= cy + 1; y++) {
             for (let x = cx - 1; x <= cx + 1; x++) {
                 const key = `${x},${y}`;
@@ -715,6 +784,24 @@ export class Agent {
                     }
                 }
             }
+        }
+
+        // Base collision resolution - Push agents OUT of the base if they overlap
+        // This handles base expansion and clipping issues.
+        if (this.rect.collidesWith(world.base.rect)) {
+            const br = world.base.rect;
+            // Calculate distance to each edge to find the nearest exit
+            const distL = Math.abs((this.rect.x + this.rect.w) - br.x);
+            const distR = Math.abs(this.rect.x - (br.x + br.w));
+            const distT = Math.abs((this.rect.y + this.rect.h) - br.y);
+            const distB = Math.abs(this.rect.y - (br.y + br.h));
+
+            const minDist = Math.min(distL, distR, distT, distB);
+
+            if (minDist === distL) this.rect.x = br.x - this.rect.w;
+            else if (minDist === distR) this.rect.x = br.x + br.w;
+            else if (minDist === distT) this.rect.y = br.y - this.rect.h;
+            else if (minDist === distB) this.rect.y = br.y + br.h;
         }
     }
 }

@@ -172,6 +172,7 @@ const StatsPanel: React.FC<StatsPanelProps> = ({
                                     <span className="w-2 h-2 rounded-full bg-red-500"></span> Searching
                                     <span className="w-2 h-2 rounded-full bg-yellow-500 ml-2"></span> Approach
                                     <span className="w-2 h-2 rounded-full bg-green-500 ml-2"></span> Return
+                                    <span className="w-2 h-2 rounded-full bg-violet-500 ml-2"></span> Revisit
                                 </div>
                             </div>
                         </>

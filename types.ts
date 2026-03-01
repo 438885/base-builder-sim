@@ -8,7 +8,8 @@ export interface Rect {
 export enum AgentState {
     SEARCH = "SEARCH",
     APPROACH = "APPROACH",
-    RETURN = "RETURN"
+    RETURN = "RETURN",
+    REVISIT = "REVISIT"
 }
 
 export enum PathfindingMode {
