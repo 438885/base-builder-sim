@@ -23,6 +23,8 @@ export class Agent {
     // Pathfinding
     path: Point[] = [];
     pathIndex: number = 0;
+    pathBaseRect: { x: number, y: number, w: number, h: number } | null = null;
+    pathTicks: number = 0;
 
     targetSlot: Slot | null = null;
     standPos: { x: number; y: number } | null = null;

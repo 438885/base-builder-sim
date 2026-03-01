@@ -32,6 +32,21 @@ export function updateAgent(agent: Agent, world: SimulationEngine) {
         agent.lastMove.y *= scale;
     }
 
+    // Path Base Sync
+    const baseRect = world.base.rect;
+    const baseChanged = !agent.pathBaseRect || 
+                        agent.pathBaseRect.x !== baseRect.x || 
+                        agent.pathBaseRect.y !== baseRect.y || 
+                        agent.pathBaseRect.w !== baseRect.w || 
+                        agent.pathBaseRect.h !== baseRect.h;
+
+    agent.pathTicks++;
+    const pathOld = agent.pathTicks > 120;
+
+    if ((baseChanged || pathOld) && agent.path.length > 0) {
+        agent.path = []; // Clear path to trigger recalculation
+    }
+
     if (agent.state === AgentState.SEARCH || agent.state === AgentState.REVISIT) {
         if (agent.state === AgentState.SEARCH) {
             agent.path = [];
@@ -61,13 +76,16 @@ export function updateAgent(agent: Agent, world: SimulationEngine) {
                     if (agent.path.length === 0) {
                         agent.path = findPath(agent.rect, {x: targetX + agent.rect.w/2, y: targetY + agent.rect.h/2}, world.base.rect, PATHFINDING_MODE, ENABLE_SMOOTHING);
                         agent.pathIndex = 0;
+                        agent.pathBaseRect = { x: baseRect.x, y: baseRect.y, w: baseRect.w, h: baseRect.h };
+                        agent.pathTicks = 0;
                     }
                     
                     if (agent.pathIndex < agent.path.length) {
                         const nextPoint = agent.path[agent.pathIndex];
                         moveTowards(agent, nextPoint.x - agent.rect.w/2, nextPoint.y - agent.rect.h/2, AGENT_SPEED, 0);
                         
-                        if (Math.abs(agent.rect.x + agent.rect.w/2 - nextPoint.x) < AGENT_SPEED && Math.abs(agent.rect.y + agent.rect.h/2 - nextPoint.y) < AGENT_SPEED) {
+                        const distToPoint = Math.sqrt(Math.pow(agent.rect.x + agent.rect.w/2 - nextPoint.x, 2) + Math.pow(agent.rect.y + agent.rect.h/2 - nextPoint.y, 2));
+                        if (distToPoint < AGENT_SPEED * 1.5) {
                             agent.pathIndex++;
                         }
                     } else {
@@ -152,13 +170,16 @@ export function updateAgent(agent: Agent, world: SimulationEngine) {
             if (agent.path.length === 0) {
                 agent.path = findPath(agent.rect, agent.targetResource.rect, world.base.rect, PATHFINDING_MODE, ENABLE_SMOOTHING);
                 agent.pathIndex = 0;
+                agent.pathBaseRect = { x: baseRect.x, y: baseRect.y, w: baseRect.w, h: baseRect.h };
+                agent.pathTicks = 0;
             }
             
             if (agent.pathIndex < agent.path.length) {
                 const nextPoint = agent.path[agent.pathIndex];
-                moveTowards(agent, nextPoint.x, nextPoint.y, AGENT_SPEED, 0);
+                moveTowards(agent, nextPoint.x - agent.rect.w/2, nextPoint.y - agent.rect.h/2, AGENT_SPEED, 0);
                 
-                if (Math.abs(agent.rect.x - nextPoint.x) < AGENT_SPEED && Math.abs(agent.rect.y - nextPoint.y) < AGENT_SPEED) {
+                const distToPoint = Math.sqrt(Math.pow(agent.rect.x + agent.rect.w/2 - nextPoint.x, 2) + Math.pow(agent.rect.y + agent.rect.h/2 - nextPoint.y, 2));
+                if (distToPoint < AGENT_SPEED * 1.5) {
                     agent.pathIndex++;
                 }
             } else {
@@ -232,10 +253,9 @@ export function updateAgent(agent: Agent, world: SimulationEngine) {
             targetY = agent.standPos.y;
         }
 
-        const distToBase = Math.sqrt(
-            Math.pow(agent.rect.center.x - world.base.rect.center.x, 2) +
-            Math.pow(agent.rect.center.y - world.base.rect.center.y, 2)
-        );
+        const dx = Math.max(world.base.rect.x - agent.rect.center.x, 0, agent.rect.center.x - (world.base.rect.x + world.base.rect.w));
+        const dy = Math.max(world.base.rect.y - agent.rect.center.y, 0, agent.rect.center.y - (world.base.rect.y + world.base.rect.h));
+        const distToBase = Math.sqrt(dx*dx + dy*dy);
         const withinLOS = distToBase <= AGENT_LOS;
         
         const effectiveMode = (withinLOS && PATHFINDING_MODE === PathfindingMode.DIRECT) ? PathfindingMode.A_STAR : PATHFINDING_MODE;
@@ -246,13 +266,16 @@ export function updateAgent(agent: Agent, world: SimulationEngine) {
             if (agent.path.length === 0) {
                 agent.path = findPath(agent.rect, {x: targetX + agent.rect.w/2, y: targetY + agent.rect.h/2}, world.base.rect, effectiveMode, ENABLE_SMOOTHING);
                 agent.pathIndex = 0;
+                agent.pathBaseRect = { x: baseRect.x, y: baseRect.y, w: baseRect.w, h: baseRect.h };
+                agent.pathTicks = 0;
             }
             
             if (agent.pathIndex < agent.path.length) {
                 const nextPoint = agent.path[agent.pathIndex];
                 moveTowards(agent, nextPoint.x - agent.rect.w/2, nextPoint.y - agent.rect.h/2, AGENT_SPEED, 0);
                 
-                if (Math.abs(agent.rect.x + agent.rect.w/2 - nextPoint.x) < AGENT_SPEED && Math.abs(agent.rect.y + agent.rect.h/2 - nextPoint.y) < AGENT_SPEED) {
+                const distToPoint = Math.sqrt(Math.pow(agent.rect.x + agent.rect.w/2 - nextPoint.x, 2) + Math.pow(agent.rect.y + agent.rect.h/2 - nextPoint.y, 2));
+                if (distToPoint < AGENT_SPEED * 1.5) {
                     agent.pathIndex++;
                 }
             } else {
@@ -280,13 +303,10 @@ export function updateAgent(agent: Agent, world: SimulationEngine) {
 
         if (agent.standPos) {
             const distToStand = Math.sqrt(Math.pow(agent.rect.x - agent.standPos.x, 2) + Math.pow(agent.rect.y - agent.standPos.y, 2));
-            if (distToStand <= AGENT_SPEED) {
-                const finalPath = findPath(agent.rect, {x: targetX + agent.rect.w/2, y: targetY + agent.rect.h/2}, world.base.rect, PathfindingMode.A_STAR, ENABLE_SMOOTHING);
-                const lastPoint = finalPath[finalPath.length - 1];
-                const reachedDest = lastPoint && Math.abs(lastPoint.x - (targetX + agent.rect.w/2)) < GRID_SIZE && Math.abs(lastPoint.y - (targetY + agent.rect.h/2)) < GRID_SIZE;
+            if (distToStand <= AGENT_SPEED * 1.5) {
                 const slotStillValid = world.base.slots.includes(agent.targetSlot!);
 
-                if (reachedDest && slotStillValid) {
+                if (slotStillValid) {
                     agent.rect.x = agent.standPos.x;
                     agent.rect.y = agent.standPos.y;
                     

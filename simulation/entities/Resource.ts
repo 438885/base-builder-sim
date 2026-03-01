@@ -10,6 +10,9 @@ export class Resource {
 
     constructor(x: number, y: number, size: number) {
         this.rect = new RectImpl(x, y, size, size);
-        this.color = '#64748b'; // slate-500
+        const gridX = Math.floor(x / size);
+        const gridY = Math.floor(y / size);
+        const hue = 180 + (Math.abs(gridX * 13 + gridY * 7) % 60);
+        this.color = `hsl(${hue}, 70%, 60%)`;
     }
 }

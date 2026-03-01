@@ -16,6 +16,12 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ engine, width, height }) => {
     const isDragging = useRef(false);
     const lastPos = useRef({ x: 0, y: 0 });
     const lastPinchDist = useRef<number | null>(null);
+    
+    // Particle System for "Juice"
+    const particles = useRef<{x: number, y: number, vx: number, vy: number, life: number, color: string, size?: number}[]>([]);
+    const floatingTexts = useRef<{x: number, y: number, text: string, life: number, color: string}[]>([]);
+    const lastDepositCount = useRef<number>(0);
+    const basePulse = useRef<number>(0);
 
     // Initialize View to Center
     useEffect(() => {
@@ -44,7 +50,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ engine, width, height }) => {
 
         let animationFrameId: number;
 
-        const render = () => {
+        const render = (time: number) => {
             const { x, y, scale } = viewRef.current;
             
             ctx.fillStyle = '#020617'; // slate-950
@@ -54,33 +60,144 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ engine, width, height }) => {
             ctx.translate(x, y);
             ctx.scale(scale, scale);
 
-            // Draw Background Grid (Optional, helps visualising space)
-            // ctx.strokeStyle = '#1e293b';
-            // ctx.lineWidth = 1 / scale;
-            // ctx.strokeRect(0, 0, engine.config.WORLD_SIZE, engine.config.WORLD_SIZE);
+            // Update Particles
+            particles.current = particles.current.filter(p => {
+                p.x += p.vx;
+                p.y += p.vy;
+                p.life -= 0.02;
+                return p.life > 0;
+            });
+
+            // Update Floating Texts
+            floatingTexts.current = floatingTexts.current.filter(t => {
+                t.y -= 0.5;
+                t.life -= 0.015;
+                return t.life > 0;
+            });
+
+            // Update Base Pulse
+            if (basePulse.current > 0) {
+                basePulse.current -= 0.05;
+            }
+
+            // Detect new deposits for particles and pulse
+            if (engine.totalPoints > lastDepositCount.current) {
+                const pointsGained = engine.totalPoints - lastDepositCount.current;
+                const br = engine.base.rect;
+                
+                // Trigger Pulse
+                basePulse.current = 1.0;
+
+                // Floating Text
+                floatingTexts.current.push({
+                    x: br.x + br.w / 2,
+                    y: br.y - 10,
+                    text: `+${Math.floor(pointsGained)}`,
+                    life: 1.0,
+                    color: '#22d3ee'
+                });
+
+                // Spawn some particles at the base perimeter
+                for (let i = 0; i < 8; i++) {
+                    const edge = Math.floor(Math.random() * 4);
+                    let px = br.x, py = br.y;
+                    if (edge === 0) { px += Math.random() * br.w; } // Top
+                    else if (edge === 1) { px += Math.random() * br.w; py += br.h; } // Bottom
+                    else if (edge === 2) { py += Math.random() * br.h; } // Left
+                    else { px += br.w; py += Math.random() * br.h; } // Right
+
+                    particles.current.push({
+                        x: px,
+                        y: py,
+                        vx: (Math.random() - 0.5) * 3,
+                        vy: (Math.random() - 0.5) * 3,
+                        life: 1.0,
+                        color: '#22d3ee',
+                        size: Math.random() * 3 + 1
+                    });
+                }
+                lastDepositCount.current = engine.totalPoints;
+            }
 
             // Draw Base Area (Individual Blocks)
             const rSize = engine.config.RESOURCE_SIZE;
             const br = engine.base.rect;
-            ctx.fillStyle = '#64748b'; // slate-500
+            
+            // Base Glow & Pulse
+            const pulseScale = 1 + basePulse.current * 0.05;
+            ctx.shadowBlur = (15 + basePulse.current * 20) / scale;
+            ctx.shadowColor = basePulse.current > 0 
+                ? `rgba(34, 211, 238, ${0.2 + basePulse.current * 0.5})` 
+                : 'rgba(34, 211, 238, 0.2)';
+            
             ctx.strokeStyle = '#020617'; // slate-950 (black-ish)
             ctx.lineWidth = 1 / scale; 
             
+            if (basePulse.current > 0) {
+                ctx.save();
+                const centerX = br.x + br.w / 2;
+                const centerY = br.y + br.h / 2;
+                ctx.translate(centerX, centerY);
+                ctx.scale(pulseScale, pulseScale);
+                ctx.translate(-centerX, -centerY);
+            }
+
             for (let bx = Math.floor(br.x); bx < Math.floor(br.x + br.w); bx += rSize) {
                 for (let by = Math.floor(br.y); by < Math.floor(br.y + br.h); by += rSize) {
+                    const gridX = Math.floor(bx / rSize);
+                    const gridY = Math.floor(by / rSize);
+                    const hue = 180 + (Math.abs(gridX * 13 + gridY * 7) % 60);
+                    ctx.fillStyle = `hsl(${hue}, 70%, 60%)`;
                     ctx.fillRect(bx, by, rSize, rSize);
                     ctx.strokeRect(bx, by, rSize, rSize);
                 }
             }
 
-            // Draw Resources
-            engine.resources.forEach(res => {
-                ctx.fillStyle = res.color;
-                ctx.fillRect(res.rect.x, res.rect.y, res.rect.w, res.rect.h);
+            if (basePulse.current > 0) {
+                ctx.restore();
+            }
+            ctx.shadowBlur = 0;
+
+            // Draw Slots (Faint outlines)
+            ctx.strokeStyle = 'rgba(34, 211, 238, 0.1)';
+            ctx.lineWidth = 0.5 / scale;
+            engine.base.slots.forEach(slot => {
+                if (!slot.reserved) {
+                    ctx.strokeRect(slot.x, slot.y, rSize, rSize);
+                }
             });
 
+            // Draw Resources
+            ctx.strokeStyle = '#020617'; // slate-950
+            ctx.lineWidth = 1 / scale;
+            engine.resources.forEach(res => {
+                if (res.isCarried || res.isDeposited) return;
+                ctx.fillStyle = res.color;
+                ctx.fillRect(res.rect.x, res.rect.y, res.rect.w, res.rect.h);
+                ctx.strokeRect(res.rect.x, res.rect.y, res.rect.w, res.rect.h);
+            });
+
+            // Draw Particles
+            particles.current.forEach(p => {
+                ctx.fillStyle = p.color;
+                ctx.globalAlpha = p.life;
+                const s = (p.size || 2) / scale;
+                ctx.fillRect(p.x - s/2, p.y - s/2, s, s);
+            });
+            ctx.globalAlpha = 1.0;
+
+            // Draw Floating Texts
+            ctx.font = `${Math.max(10, 14 / scale)}px Inter, sans-serif`;
+            ctx.textAlign = 'center';
+            floatingTexts.current.forEach(t => {
+                ctx.fillStyle = t.color;
+                ctx.globalAlpha = t.life;
+                ctx.fillText(t.text, t.x, t.y);
+            });
+            ctx.globalAlpha = 1.0;
+
             // Draw Agent Paths (APPROACH, RETURN, and REVISIT states)
-            ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
             ctx.lineWidth = 1 / scale; 
             
             ctx.setLineDash([4, 4]); // Dashed line
@@ -144,26 +261,51 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ engine, width, height }) => {
 
             // Draw Agents
             engine.agents.forEach(agent => {
+                let agentColor = '#ef4444';
                 switch (agent.state) {
-                    case 'SEARCH': ctx.fillStyle = '#ef4444'; break;
-                    case 'APPROACH': ctx.fillStyle = '#eab308'; break;
-                    case 'RETURN': ctx.fillStyle = '#10b981'; break;
-                    case 'REVISIT': ctx.fillStyle = '#8b5cf6'; break; // violet-500
+                    case 'SEARCH': agentColor = '#ef4444'; break;
+                    case 'APPROACH': agentColor = '#eab308'; break;
+                    case 'RETURN': agentColor = '#10b981'; break;
+                    case 'REVISIT': agentColor = '#8b5cf6'; break;
                 }
                 
+                // Bobbing animation
+                const bobOffset = Math.sin(time * 0.01 + parseInt(agent.id, 36)) * 1.5;
+                
+                ctx.fillStyle = agentColor;
                 ctx.beginPath();
-                ctx.roundRect(agent.rect.x, agent.rect.y, agent.rect.w, agent.rect.h, 2);
+                ctx.roundRect(agent.rect.x, agent.rect.y + bobOffset, agent.rect.w, agent.rect.h, 2);
                 ctx.fill();
+
+                // Carried Resource
+                if (agent.carriedResource) {
+                    ctx.fillStyle = agent.carriedResource.color;
+                    const resSize = agent.rect.w * 0.6;
+                    ctx.fillRect(
+                        agent.rect.x + (agent.rect.w - resSize) / 2,
+                        agent.rect.y + (agent.rect.h - resSize) / 2 + bobOffset,
+                        resSize,
+                        resSize
+                    );
+                    ctx.strokeStyle = '#020617';
+                    ctx.lineWidth = 0.5 / scale;
+                    ctx.strokeRect(
+                        agent.rect.x + (agent.rect.w - resSize) / 2,
+                        agent.rect.y + (agent.rect.h - resSize) / 2 + bobOffset,
+                        resSize,
+                        resSize
+                    );
+                }
 
                 // Direction Indicator
                 ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
                 const centerX = agent.rect.x + agent.rect.w / 2;
-                const centerY = agent.rect.y + agent.rect.h / 2;
+                const centerY = agent.rect.y + agent.rect.h / 2 + bobOffset;
                 const dx = Math.sign(agent.lastMove.x) * (agent.rect.w * 0.3);
                 const dy = Math.sign(agent.lastMove.y) * (agent.rect.h * 0.3);
                 
                 ctx.beginPath();
-                ctx.arc(centerX + dx, centerY + dy, agent.rect.w * 0.2, 0, Math.PI * 2);
+                ctx.arc(centerX + dx, centerY + dy, agent.rect.w * 0.15, 0, Math.PI * 2);
                 ctx.fill();
             });
 
@@ -171,7 +313,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ engine, width, height }) => {
             animationFrameId = requestAnimationFrame(render);
         };
 
-        render();
+        animationFrameId = requestAnimationFrame(render);
 
         return () => {
             cancelAnimationFrame(animationFrameId);

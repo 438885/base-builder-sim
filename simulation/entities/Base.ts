@@ -15,7 +15,9 @@ export class Base {
 
     constructor(config: SimulationConfig) {
         this.resourceSize = config.RESOURCE_SIZE;
-        const startPos = (config.WORLD_SIZE - config.BASE_START_SIZE) / 2;
+        let startPos = (config.WORLD_SIZE - config.BASE_START_SIZE) / 2;
+        // Align to resource grid
+        startPos = Math.floor(startPos / this.resourceSize) * this.resourceSize;
         this.rect = new RectImpl(startPos, startPos, config.BASE_START_SIZE, config.BASE_START_SIZE);
         this._generateLayerSlots();
     }

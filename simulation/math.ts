@@ -55,11 +55,13 @@ export function smoothPath(path: Point[], obstacle: Rect, agentW: number, agentH
     const smoothed = [path[0]];
     let inputIndex = 0;
     
+    // Inflate obstacle by half agent size + a small safety buffer
+    const buffer = 2;
     const safeObstacle = {
-        x: obstacle.x - agentW - 1, 
-        y: obstacle.y - agentH - 1,
-        w: obstacle.w + agentW + 2,
-        h: obstacle.h + agentH + 2
+        x: obstacle.x - agentW / 2 - buffer, 
+        y: obstacle.y - agentH / 2 - buffer,
+        w: obstacle.w + agentW + buffer * 2,
+        h: obstacle.h + agentH + buffer * 2
     };
 
     while (inputIndex < path.length - 1) {
@@ -81,12 +83,25 @@ export function findPath(start: Rect, end: Point, obstacle: Rect, mode: Pathfind
     const startGrid = { x: Math.floor(start.x / GRID_SIZE), y: Math.floor(start.y / GRID_SIZE) };
     const endGrid = { x: Math.floor(end.x / GRID_SIZE), y: Math.floor(end.y / GRID_SIZE) };
     
-    const obsGrid = {
-        minX: Math.floor((obstacle.x - start.w - GRID_SIZE/2) / GRID_SIZE) + 1,
-        maxX: Math.ceil((obstacle.x + obstacle.w - GRID_SIZE/2) / GRID_SIZE) - 1,
-        minY: Math.floor((obstacle.y - start.h - GRID_SIZE/2) / GRID_SIZE) + 1,
-        maxY: Math.ceil((obstacle.y + obstacle.h - GRID_SIZE/2) / GRID_SIZE) - 1
+    // Inflate obstacle by half agent size + buffer to prevent cutting corners or getting stuck
+    const buffer = 4; 
+    const halfW = start.w / 2;
+    const halfH = start.h / 2;
+    
+    const inflatedObs = {
+        minX: obstacle.x - halfW - buffer,
+        maxX: obstacle.x + obstacle.w + halfW + buffer,
+        minY: obstacle.y - halfH - buffer,
+        maxY: obstacle.y + obstacle.h + halfH + buffer
     };
+
+    const isInsideObs = (gx: number, gy: number) => {
+        const wx = gx * GRID_SIZE + GRID_SIZE / 2;
+        const wy = gy * GRID_SIZE + GRID_SIZE / 2;
+        return wx > inflatedObs.minX && wx < inflatedObs.maxX && wy > inflatedObs.minY && wy < inflatedObs.maxY;
+    };
+
+    const startIsInside = isInsideObs(startGrid.x, startGrid.y);
 
     const openList: Node[] = [];
     const closedSet = new Set<string>();
@@ -97,7 +112,7 @@ export function findPath(start: Rect, end: Point, obstacle: Rect, mode: Pathfind
     let minH = Infinity;
 
     let iterations = 0;
-    const MAX_ITERATIONS = 2500; 
+    const MAX_ITERATIONS = 5000; 
 
     while (openList.length > 0 && iterations < MAX_ITERATIONS) {
         iterations++;
@@ -136,26 +151,40 @@ export function findPath(start: Rect, end: Point, obstacle: Rect, mode: Pathfind
 
             if (closedSet.has(key)) continue;
 
+            // Boundary check (assuming 1024 world size for now, but should ideally come from config)
+            // We'll just allow it and let the world bounds clamp it later if needed, 
+            // but grid coordinates should be positive.
+            if (nx < 0 || ny < 0) continue;
+
             const isStartOrEnd = (nx === startGrid.x && ny === startGrid.y) || (nx === endGrid.x && ny === endGrid.y);
             let isObstacle = false;
             
             if (!isStartOrEnd) {
-                if (nx >= obsGrid.minX && nx <= obsGrid.maxX && ny >= obsGrid.minY && ny <= obsGrid.maxY) {
-                    isObstacle = true;
+                if (isInsideObs(nx, ny)) {
+                    // If we started inside, allow moving to neighbors until we get out
+                    if (!startIsInside) {
+                        isObstacle = true;
+                    } else {
+                        // If we are inside, only allow moving if it's not "deeper" or just allow it to find a way out
+                        // For simplicity, if we start inside, we allow all moves until we find a non-obstacle cell
+                        // but we prefer non-obstacle cells via the heuristic/cost if possible.
+                        // Actually, let's just allow it but add a penalty.
+                    }
                 }
                 
+                // Diagonal check to prevent cutting corners too closely
                 if (!isObstacle && dir.x !== 0 && dir.y !== 0) {
-                    const isOrthogonal1Obstacle = nx >= obsGrid.minX && nx <= obsGrid.maxX && current.y >= obsGrid.minY && current.y <= obsGrid.maxY;
-                    const isOrthogonal2Obstacle = current.x >= obsGrid.minX && current.x <= obsGrid.maxX && ny >= obsGrid.minY && ny <= obsGrid.maxY;
-                    if (isOrthogonal1Obstacle || isOrthogonal2Obstacle) {
-                        isObstacle = true;
+                    if (isInsideObs(nx, current.y) || isInsideObs(current.x, ny)) {
+                        if (!startIsInside) {
+                            isObstacle = true;
+                        }
                     }
                 }
             }
 
             if (isObstacle) continue;
 
-            const moveCost = Math.sqrt(dir.x*dir.x + dir.y*dir.y);
+            const moveCost = Math.sqrt(dir.x*dir.x + dir.y*dir.y) * (isInsideObs(nx, ny) ? 5 : 1);
             const gScore = current.g + moveCost;
             
             const existingNode = openList.find(n => n.key === key);
