@@ -6,6 +6,7 @@ export class Resource {
     isCarried: boolean = false;
     isDeposited: boolean = false;
     claimedBy: Agent | null = null;
+    claimTime: number = 0;
     color: string;
 
     constructor(x: number, y: number, size: number) {

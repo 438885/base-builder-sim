@@ -9,11 +9,28 @@ export function updateAgent(agent: Agent, world: SimulationEngine) {
     const { AGENT_SPEED, AGENT_LOS, WORLD_SIZE, AGENT_WIGGLE, PATHFINDING_MODE, ENABLE_SMOOTHING } = world.config;
 
     // Stuck detection
-    const distMoved = Math.sqrt(Math.pow(agent.rect.x - agent.lastPos.x, 2) + Math.pow(agent.rect.y - agent.lastPos.y, 2));
-    if (distMoved < 0.1) {
+    if (!agent.stuckPos) {
+        agent.stuckPos = { x: agent.rect.x, y: agent.rect.y };
+    }
+    const netDistMoved = Math.sqrt(Math.pow(agent.rect.x - agent.stuckPos.x, 2) + Math.pow(agent.rect.y - agent.stuckPos.y, 2));
+    
+    let isWaitingForSlot = false;
+    if (agent.state === AgentState.RETURN && !agent.targetSlot) {
+        const distToBase = Math.sqrt(
+            Math.pow(agent.rect.center.x - world.base.rect.center.x, 2) +
+            Math.pow(agent.rect.center.y - world.base.rect.center.y, 2)
+        );
+        const safeDistance = Math.max(world.base.rect.w, world.base.rect.h) / 2 + 32;
+        if (distToBase < safeDistance) {
+            isWaitingForSlot = true;
+        }
+    }
+
+    if (netDistMoved < AGENT_SPEED * 1.5 && !isWaitingForSlot) {
         agent.stuckTicks++;
     } else {
         agent.stuckTicks = 0;
+        agent.stuckPos = { x: agent.rect.x, y: agent.rect.y };
     }
     agent.lastPos = { x: agent.rect.x, y: agent.rect.y };
 
@@ -22,6 +39,7 @@ export function updateAgent(agent: Agent, world: SimulationEngine) {
         agent.rect.x += Math.cos(angle) * AGENT_SPEED * 2;
         agent.rect.y += Math.sin(angle) * AGENT_SPEED * 2;
         agent.stuckTicks = 0;
+        agent.stuckPos = { x: agent.rect.x, y: agent.rect.y };
         agent.path = []; 
     }
 
@@ -109,27 +127,37 @@ export function updateAgent(agent: Agent, world: SimulationEngine) {
 
                         if (distSq <= losSq) {
                             let isClaimedByNeighbor = false;
+                            const currentTick = world.tickCount;
 
                             if (res.claimedBy && res.claimedBy !== agent) {
-                                const myPriority = agent.calculatePriority(world, { x: rcx, y: rcy });
-                                const otherPriority = res.claimedBy.calculatePriority(world, { x: rcx, y: rcy });
-
-                                // Steal if priority is significantly higher
-                                if (myPriority > otherPriority * 1.1) {
-                                    const previousOwner = res.claimedBy;
-                                    previousOwner.targetResource = null;
-                                    previousOwner.state = AgentState.SEARCH;
-                                    previousOwner.path = [];
-                                    
-                                    isClaimedByNeighbor = false;
+                                // Expiration check: if claimed more than 300 ticks ago, it expires
+                                if (currentTick - res.claimTime > 300) {
+                                    res.claimedBy.targetResource = null;
+                                    res.claimedBy.state = AgentState.SEARCH;
+                                    res.claimedBy = null;
                                 } else {
-                                    isClaimedByNeighbor = true;
+                                    const ocx = res.claimedBy.rect.x + res.claimedBy.rect.w / 2;
+                                    const ocy = res.claimedBy.rect.y + res.claimedBy.rect.h / 2;
+                                    const distToAgentSq = (cx - ocx) ** 2 + (cy - ocy) ** 2;
+
+                                    if (distToAgentSq <= losSq) {
+                                        // Priority check: Steal if we are significantly closer
+                                        const otherDistToResSq = (ocx - rcx) ** 2 + (ocy - rcy) ** 2;
+                                        if (distSq < otherDistToResSq * 0.5) { // We are much closer
+                                            res.claimedBy.targetResource = null;
+                                            res.claimedBy.state = AgentState.SEARCH;
+                                            res.claimedBy = null;
+                                        } else {
+                                            isClaimedByNeighbor = true;
+                                        }
+                                    }
                                 }
                             }
 
                             if (!isClaimedByNeighbor) {
                                 agent.targetResource = res;
                                 res.claimedBy = agent;
+                                res.claimTime = currentTick;
                                 agent.state = AgentState.APPROACH;
                                 agent.path = [];
                                 foundTarget = true;
@@ -143,7 +171,28 @@ export function updateAgent(agent: Agent, world: SimulationEngine) {
             if (foundTarget) break;
         }
     } else if (agent.state === AgentState.APPROACH) {
-        if (!agent.targetResource || agent.targetResource.isCarried || agent.targetResource.isDeposited || agent.targetResource.claimedBy !== agent) {
+        if (!agent.targetResource || agent.targetResource.isCarried || agent.targetResource.isDeposited) {
+            if (agent.targetResource && agent.targetResource.claimedBy === agent) {
+                agent.targetResource.claimedBy = null;
+            }
+            agent.targetResource = null;
+            agent.state = AgentState.SEARCH;
+            agent.path = [];
+            return;
+        }
+
+        // Check if we lost our claim (stolen or expired)
+        if (agent.targetResource.claimedBy !== agent) {
+            agent.targetResource = null;
+            agent.state = AgentState.SEARCH;
+            agent.path = [];
+            return;
+        }
+
+        // Expiration check
+        const currentTick = world.tickCount;
+        if (currentTick - agent.targetResource.claimTime > 300) {
+            agent.targetResource.claimedBy = null;
             agent.targetResource = null;
             agent.state = AgentState.SEARCH;
             agent.path = [];
@@ -204,10 +253,6 @@ export function updateAgent(agent: Agent, world: SimulationEngine) {
             agent.targetResource = null;
             agent.state = AgentState.RETURN;
             agent.path = [];
-            agent.targetSlot = world.base.reserveSlot({ x: agent.rect.x, y: agent.rect.y });
-            if (agent.targetSlot) {
-                agent.standPos = calculateStandPos(agent, agent.targetSlot, world.base);
-            }
         }
     } else if (agent.state === AgentState.RETURN) {
         if (!agent.carriedResource) {
@@ -221,7 +266,19 @@ export function updateAgent(agent: Agent, world: SimulationEngine) {
             return;
         }
 
-        if (!agent.targetSlot) {
+        const distToBase = Math.sqrt(
+            Math.pow(agent.rect.center.x - world.base.rect.center.x, 2) +
+            Math.pow(agent.rect.center.y - world.base.rect.center.y, 2)
+        );
+
+        const withinLOS = distToBase <= AGENT_LOS;
+
+        if (agent.targetSlot && !world.base.slots.includes(agent.targetSlot)) {
+            agent.targetSlot = null;
+            agent.standPos = null;
+        }
+
+        if (!agent.targetSlot && withinLOS) {
             agent.targetSlot = world.base.reserveSlot({ x: agent.rect.x, y: agent.rect.y });
             if (agent.targetSlot) {
                 agent.standPos = calculateStandPos(agent, agent.targetSlot, world.base);
@@ -234,14 +291,14 @@ export function updateAgent(agent: Agent, world: SimulationEngine) {
         if (agent.standPos) {
             targetX = agent.standPos.x;
             targetY = agent.standPos.y;
+        } else {
+            const safeDistance = Math.max(world.base.rect.w, world.base.rect.h) / 2 + 32;
+            if (distToBase < safeDistance) {
+                targetX = agent.rect.x;
+                targetY = agent.rect.y;
+            }
         }
 
-        const distToBase = Math.sqrt(
-            Math.pow(agent.rect.center.x - world.base.rect.center.x, 2) +
-            Math.pow(agent.rect.center.y - world.base.rect.center.y, 2)
-        );
-        const withinLOS = distToBase <= AGENT_LOS;
-        
         const effectiveMode = (withinLOS && PATHFINDING_MODE === PathfindingMode.DIRECT) ? PathfindingMode.A_STAR : PATHFINDING_MODE;
 
         if (effectiveMode === PathfindingMode.DIRECT || !agent.standPos) {
@@ -284,13 +341,10 @@ export function updateAgent(agent: Agent, world: SimulationEngine) {
 
         if (agent.standPos) {
             const distToStand = Math.sqrt(Math.pow(agent.rect.x - agent.standPos.x, 2) + Math.pow(agent.rect.y - agent.standPos.y, 2));
-            if (distToStand <= AGENT_SPEED) {
-                const finalPath = findPath(agent.rect, {x: targetX + agent.rect.w/2, y: targetY + agent.rect.h/2}, world.base.rect, PathfindingMode.A_STAR, ENABLE_SMOOTHING);
-                const lastPoint = finalPath[finalPath.length - 1];
-                const reachedDest = lastPoint && Math.abs(lastPoint.x - (targetX + agent.rect.w/2)) < GRID_SIZE && Math.abs(lastPoint.y - (targetY + agent.rect.h/2)) < GRID_SIZE;
+            if (distToStand <= AGENT_SPEED * 2.5) {
                 const slotStillValid = world.base.slots.includes(agent.targetSlot!);
 
-                if (reachedDest && slotStillValid) {
+                if (slotStillValid) {
                     agent.rect.x = agent.standPos.x;
                     agent.rect.y = agent.standPos.y;
                     
